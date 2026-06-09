@@ -74,23 +74,44 @@ async def run_pipeline(
         await stages.run_recon(ctx, db, **recon_kwargs)
 
         # ---- Stages 2-3-4 loop: Hunt → Validate → Gapfill ----
-        for i in range(config.gapfill_iterations + 1):
-            _budget_check(f"hunt(iter={i})")
-            findings_added = await stages.run_hunt(ctx, db, budget_check=_budget_check)
-            if findings_added == 0 and i > 0:
-                log.info("[%s] no new findings — exiting Hunt/Gapfill loop", run_id)
-                break
+        # Budget = min(per_run + 1, max_iterations - already_used). The +1
+        # preserves the legacy `range(gapfill_iterations + 1)` semantic.
+        gapfill_used = db.get_loop_counter(run_id, "gapfill")
+        gapfill_remaining = max(0, config.max_gapfill_iterations - gapfill_used)
+        gapfill_budget = min(config.gapfill_per_run + 1, gapfill_remaining)
+        if gapfill_budget <= 0:
+            log.warning(
+                "[%s] gapfill cap exhausted (%d/%d) — skipping loop",
+                run_id, gapfill_used, config.max_gapfill_iterations,
+            )
+        else:
+            if gapfill_remaining < config.gapfill_per_run + 1:
+                log.info(
+                    "[%s] gapfill loop bounded to %d iterations "
+                    "(per_run=%d, cap_remaining=%d)",
+                    run_id, gapfill_budget, config.gapfill_per_run, gapfill_remaining,
+                )
+            for i in range(gapfill_budget):
+                _budget_check(f"hunt(iter={i})")
+                findings_added = await stages.run_hunt(ctx, db, budget_check=_budget_check)
+                if findings_added == 0 and i > 0:
+                    log.info("[%s] no new findings — exiting Hunt/Gapfill loop", run_id)
+                    break
 
-            _budget_check(f"validate(iter={i})")
-            await stages.run_validate(ctx, db)
+                _budget_check(f"validate(iter={i})")
+                await stages.run_validate(ctx, db)
 
-            if i >= config.gapfill_iterations:
-                break  # final iteration: don't gapfill again
-            _budget_check(f"gapfill(iter={i})")
-            new_tasks = await stages.run_gapfill(ctx, db)
-            if new_tasks == 0:
-                log.info("[%s] gapfill produced 0 tasks — exiting loop", run_id)
-                break
+                # Persist progress only after a successful iteration
+                new_count = db.increment_loop_counter(run_id, "gapfill")
+                log.debug("[%s] gapfill counter → %d", run_id, new_count)
+
+                if i >= config.gapfill_per_run:
+                    break  # final iteration: don't gapfill again
+                _budget_check(f"gapfill(iter={i})")
+                new_tasks = await stages.run_gapfill(ctx, db)
+                if new_tasks == 0:
+                    log.info("[%s] gapfill produced 0 tasks — exiting loop", run_id)
+                    break
 
         # ---- Stage 5: Dedupe ----
         _budget_check("dedupe")
@@ -101,19 +122,39 @@ async def run_pipeline(
         await stages.run_trace(ctx, db)
 
         # ---- Stage 7: Feedback (re-runs Hunt/Validate/Dedupe/Trace) ----
-        for i in range(config.feedback_iterations):
-            _budget_check(f"feedback(iter={i})")
-            new_tasks = await stages.run_feedback(ctx, db)
-            if new_tasks == 0:
-                break
-            _budget_check(f"feedback-hunt(iter={i})")
-            await stages.run_hunt(ctx, db)
-            _budget_check(f"feedback-validate(iter={i})")
-            await stages.run_validate(ctx, db)
-            _budget_check(f"feedback-dedupe(iter={i})")
-            await stages.run_dedupe(ctx, db)
-            _budget_check(f"feedback-trace(iter={i})")
-            await stages.run_trace(ctx, db)
+        # Budget = min(per_run, max_iterations - already_used). No +1 here —
+        # matches the legacy `range(feedback_iterations)` semantic.
+        feedback_used = db.get_loop_counter(run_id, "feedback")
+        feedback_remaining = max(0, config.max_feedback_iterations - feedback_used)
+        feedback_budget = min(config.feedback_per_run, feedback_remaining)
+        if feedback_budget <= 0:
+            log.warning(
+                "[%s] feedback cap exhausted (%d/%d) — skipping loop",
+                run_id, feedback_used, config.max_feedback_iterations,
+            )
+        else:
+            if feedback_remaining < config.feedback_per_run:
+                log.info(
+                    "[%s] feedback loop bounded to %d iterations "
+                    "(per_run=%d, cap_remaining=%d)",
+                    run_id, feedback_budget, config.feedback_per_run, feedback_remaining,
+                )
+            for i in range(feedback_budget):
+                _budget_check(f"feedback(iter={i})")
+                new_tasks = await stages.run_feedback(ctx, db)
+                if new_tasks == 0:
+                    break
+                _budget_check(f"feedback-hunt(iter={i})")
+                await stages.run_hunt(ctx, db)
+                _budget_check(f"feedback-validate(iter={i})")
+                await stages.run_validate(ctx, db)
+                _budget_check(f"feedback-dedupe(iter={i})")
+                await stages.run_dedupe(ctx, db)
+                _budget_check(f"feedback-trace(iter={i})")
+                await stages.run_trace(ctx, db)
+                # Persist progress only after a successful iteration
+                new_count = db.increment_loop_counter(run_id, "feedback")
+                log.debug("[%s] feedback counter → %d", run_id, new_count)
 
         # ---- Stage 8: Report ----
         _budget_check("report")

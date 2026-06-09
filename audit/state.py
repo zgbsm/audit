@@ -109,6 +109,15 @@ CREATE TABLE IF NOT EXISTS artifacts (
     created_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS loop_counters (
+    run_id TEXT NOT NULL,
+    loop_name TEXT NOT NULL,
+    iter_count INTEGER NOT NULL DEFAULT 0,
+    last_iter_at REAL,
+    PRIMARY KEY (run_id, loop_name),
+    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_run_status ON tasks(run_id, status);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id);
 CREATE INDEX IF NOT EXISTS idx_findings_validation ON findings(validation_status);
@@ -437,6 +446,34 @@ class StateDB:
             (run_id,),
         ).fetchone()
         return float(row["total"]) if row else 0.0
+
+    # ---------- loop counters ----------
+    # Per-run, per-loop-name progress counter. The counter is the source of
+    # truth across --resume invocations: orchestrator reads it to bound its
+    # for-loop range and increments it after a successful loop body.
+    # The cap (max_iterations) is enforced in the orchestrator, not here.
+
+    def get_loop_counter(self, run_id: str, loop_name: str) -> int:
+        row = self._conn.execute(
+            "SELECT iter_count FROM loop_counters WHERE run_id = ? AND loop_name = ?",
+            (run_id, loop_name),
+        ).fetchone()
+        return int(row["iter_count"]) if row else 0
+
+    def increment_loop_counter(self, run_id: str, loop_name: str) -> int:
+        """Atomically +1 via UPSERT and return the new count."""
+        now = time.time()
+        cur = self._conn.execute(
+            """INSERT INTO loop_counters (run_id, loop_name, iter_count, last_iter_at)
+               VALUES (?, ?, 1, ?)
+               ON CONFLICT(run_id, loop_name) DO UPDATE SET
+                 iter_count = loop_counters.iter_count + 1,
+                 last_iter_at = excluded.last_iter_at
+               RETURNING iter_count""",
+            (run_id, loop_name, now),
+        )
+        self._conn.commit()
+        return int(cur.fetchone()["iter_count"])
 
     # ---------- artifacts ----------
 

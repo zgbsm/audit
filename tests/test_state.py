@@ -81,3 +81,37 @@ def test_cost_aggregation(tmp_path: Path) -> None:
     }, "num_turns": 5, "duration_ms": 4321})
     assert abs(db.total_cost(rid) - 0.03) < 1e-9
     db.close()
+
+
+def test_loop_counter_increment(tmp_path: Path) -> None:
+    db = StateDB(tmp_path / "state.db")
+    rid = db.create_run("/r", "test_run")
+    assert db.get_loop_counter(rid, "gapfill") == 0
+    assert db.increment_loop_counter(rid, "gapfill") == 1
+    assert db.increment_loop_counter(rid, "gapfill") == 2
+    assert db.get_loop_counter(rid, "gapfill") == 2
+    db.close()
+
+
+def test_loop_counter_independent_per_loop_name(tmp_path: Path) -> None:
+    db = StateDB(tmp_path / "state.db")
+    rid = db.create_run("/r", "test_run")
+    db.increment_loop_counter(rid, "gapfill")
+    db.increment_loop_counter(rid, "gapfill")
+    db.increment_loop_counter(rid, "feedback")
+    assert db.get_loop_counter(rid, "gapfill") == 2
+    assert db.get_loop_counter(rid, "feedback") == 1
+    assert db.get_loop_counter(rid, "trace") == 0  # not touched
+    db.close()
+
+
+def test_loop_counter_persists_across_reopen(tmp_path: Path) -> None:
+    db = StateDB(tmp_path / "state.db")
+    rid = db.create_run("/r", "test_run")
+    db.increment_loop_counter(rid, "gapfill")
+    db.increment_loop_counter(rid, "feedback")
+    db.close()
+    db2 = StateDB(tmp_path / "state.db")  # reopen same file
+    assert db2.get_loop_counter(rid, "gapfill") == 1
+    assert db2.get_loop_counter(rid, "feedback") == 1
+    db2.close()

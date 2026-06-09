@@ -22,8 +22,14 @@ class StageConfig:
 @dataclass
 class HarnessConfig:
     stages: dict[str, StageConfig] = field(default_factory=dict)
-    gapfill_iterations: int = 2
-    feedback_iterations: int = 1
+    # Per-run soft cap. Each `run_pipeline` invocation runs at most this many
+    # iterations of the corresponding loop.
+    gapfill_per_run: int = 2
+    feedback_per_run: int = 1
+    # Per-run-id hard cap. The counter is persisted in DB and survives
+    # --resume. Effective iterations = min(per_run, max - already_used).
+    max_gapfill_iterations: int = 100
+    max_feedback_iterations: int = 50
 
     def get(self, stage: str) -> StageConfig:
         try:
@@ -63,8 +69,17 @@ def load_config(path: Path | None = None) -> HarnessConfig:
             ),
         )
     loops = raw.get("loops", {}) or {}
+    max_iters = loops.get("max_iterations", {}) or {}
     return HarnessConfig(
         stages=stages,
-        gapfill_iterations=int(loops.get("gapfill_iterations", 2)),
-        feedback_iterations=int(loops.get("feedback_iterations", 1)),
+        # New key is gapfill_per_run / feedback_per_run; fall back to the
+        # legacy gapfill_iterations / feedback_iterations for old yaml.
+        gapfill_per_run=int(loops.get(
+            "gapfill_per_run", loops.get("gapfill_iterations", 2)
+        )),
+        feedback_per_run=int(loops.get(
+            "feedback_per_run", loops.get("feedback_iterations", 1)
+        )),
+        max_gapfill_iterations=int(max_iters.get("gapfill", 100)),
+        max_feedback_iterations=int(max_iters.get("feedback", 50)),
     )
