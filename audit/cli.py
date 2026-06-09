@@ -210,6 +210,58 @@ def status(run_id: str | None) -> None:
         db.close()
 
 
+@main.command("recover")
+@click.option("--run-id", required=True, help="Run whose failed tasks should be reset.")
+@click.option("--yes", is_flag=True,
+              help="Actually apply the reset (default is dry-run).")
+def recover(run_id: str, yes: bool) -> None:
+    """Reset every 'failed' task in a run back to 'pending'.
+
+    Only tasks currently in status='failed' are touched; pending/done
+    tasks are never modified. The run's overall status is NOT changed —
+    follow up with `audit run --resume --run-id RUN_ID` to re-execute
+    the recovered tasks. Works on runs in any status, including
+    'running' (useful when the orchestrator crashed mid-pipeline and
+    left the run stuck).
+    """
+    db = StateDB(DB_PATH)
+    try:
+        run = db.get_run(run_id)
+        if run is None:
+            console.print(f"[red]unknown run_id {run_id!r}[/red]")
+            sys.exit(1)
+        if run["status"] == "running":
+            console.print(
+                f"[yellow]warning:[/yellow] run {run_id} is marked 'running' — "
+                f"proceeding (typical when a previous orchestrator crashed "
+                f"and left the run in a stuck state)"
+            )
+        failed = db.get_failed_tasks(run_id)
+        if not failed:
+            console.print(f"[green]no failed tasks in {run_id}[/green]")
+            return
+        t = Table(title=f"failed tasks in {run_id} ({len(failed)})", show_lines=False)
+        t.add_column("task_id"); t.add_column("attack_class"); t.add_column("rationale")
+        for task in failed:
+            t.add_row(task.task_id, task.attack_class, task.rationale[:80])
+        console.print(t)
+        if not yes:
+            console.print(
+                "[yellow]dry-run[/yellow] pass --yes to apply. "
+                f"Then: [cyan]audit run --resume --run-id {run_id}[/cyan]"
+            )
+            return
+        changed = db.recover_failed_tasks(run_id)
+        console.print(
+            f"[green]reset {len(changed)} task(s) to 'pending'[/green]"
+        )
+        console.print(
+            f"next: [cyan]audit run --resume --run-id {run_id}[/cyan]"
+        )
+    finally:
+        db.close()
+
+
 @main.command("report")
 @click.option("--run-id", required=True)
 @click.option("--format", "fmt", type=click.Choice(["json", "md"]), default="json")

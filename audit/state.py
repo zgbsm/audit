@@ -261,6 +261,31 @@ class StateDB:
         )
         self._conn.commit()
 
+    def get_failed_tasks(self, run_id: str) -> list[Task]:
+        rows = self._conn.execute(
+            "SELECT * FROM tasks WHERE run_id = ? AND status = 'failed' "
+            "ORDER BY created_at",
+            (run_id,),
+        ).fetchall()
+        return [self._row_to_task(r) for r in rows]
+
+    def recover_failed_tasks(self, run_id: str) -> list[str]:
+        """Atomically reset every task with status='failed' to 'pending'.
+
+        Returns the task_ids that were changed. Tasks in any other status
+        (pending/done) are NOT touched — this is a one-way failed→pending
+        reset, not a generic status mutator. Use `audit run --resume`
+        afterwards to re-execute the recovered tasks.
+        """
+        with self._conn:
+            cur = self._conn.execute(
+                "UPDATE tasks SET status = 'pending', updated_at = ? "
+                "WHERE run_id = ? AND status = 'failed' "
+                "RETURNING task_id",
+                (time.time(), run_id),
+            )
+            return [row["task_id"] for row in cur.fetchall()]
+
     @staticmethod
     def _row_to_task(r: sqlite3.Row) -> Task:
         return Task(

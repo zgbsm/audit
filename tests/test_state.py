@@ -115,3 +115,35 @@ def test_loop_counter_persists_across_reopen(tmp_path: Path) -> None:
     assert db2.get_loop_counter(rid, "gapfill") == 1
     assert db2.get_loop_counter(rid, "feedback") == 1
     db2.close()
+
+
+def test_recover_failed_tasks(tmp_path: Path) -> None:
+    db = StateDB(tmp_path / "state.db")
+    rid = db.create_run("/r", "test_run")
+    db.add_task(rid, {"task_id": "t_1", "attack_class": "sqli",
+                      "scope_hint": "x", "target_files": ["a.py"],
+                      "rationale": "raw f-string", "priority": 1,
+                      "source": "recon"})
+    db.add_task(rid, {"task_id": "t_2", "attack_class": "xss",
+                      "scope_hint": "y", "target_files": ["b.py"],
+                      "rationale": "unescaped", "priority": 2,
+                      "source": "recon"})
+    db.add_task(rid, {"task_id": "t_3", "attack_class": "ssrf",
+                      "scope_hint": "z", "target_files": ["c.py"],
+                      "rationale": "user-controlled url", "priority": 3,
+                      "source": "recon"})
+    db.update_task_status("t_1", "done")
+    db.update_task_status("t_2", "failed")
+    # t_3 left as 'pending' — must not be touched
+
+    failed = db.get_failed_tasks(rid)
+    assert [t.task_id for t in failed] == ["t_2"]
+
+    changed = db.recover_failed_tasks(rid)
+    assert changed == ["t_2"]
+    statuses = {t.task_id: t.status for t in db.get_all_tasks(rid)}
+    assert statuses == {"t_1": "done", "t_2": "pending", "t_3": "pending"}
+
+    # Re-running on a clean slate is a no-op (nothing failed)
+    assert db.recover_failed_tasks(rid) == []
+    db.close()
