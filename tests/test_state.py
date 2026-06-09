@@ -117,6 +117,32 @@ def test_loop_counter_persists_across_reopen(tmp_path: Path) -> None:
     db2.close()
 
 
+def test_reset_running_tasks(tmp_path: Path) -> None:
+    db = StateDB(tmp_path / "state.db")
+    rid = db.create_run("/r", "test_run")
+    db.add_task(rid, {"task_id": "t_1", "attack_class": "sqli",
+                      "scope_hint": "x", "target_files": ["a.py"],
+                      "rationale": "r", "priority": 1, "source": "recon"})
+    db.add_task(rid, {"task_id": "t_2", "attack_class": "xss",
+                      "scope_hint": "y", "target_files": ["b.py"],
+                      "rationale": "r", "priority": 2, "source": "recon"})
+    db.add_task(rid, {"task_id": "t_3", "attack_class": "ssrf",
+                      "scope_hint": "z", "target_files": ["c.py"],
+                      "rationale": "r", "priority": 3, "source": "recon"})
+    db.update_task_status("t_1", "done")
+    db.update_task_status("t_2", "running")
+    # t_3 left as 'pending' — must not be touched
+
+    n = db.reset_running_tasks(rid)
+    assert n == 1
+    statuses = {t.task_id: t.status for t in db.get_all_tasks(rid)}
+    assert statuses == {"t_1": "done", "t_2": "pending", "t_3": "pending"}
+
+    # Re-running is a no-op (nothing running)
+    assert db.reset_running_tasks(rid) == 0
+    db.close()
+
+
 def test_recover_failed_tasks(tmp_path: Path) -> None:
     db = StateDB(tmp_path / "state.db")
     rid = db.create_run("/r", "test_run")

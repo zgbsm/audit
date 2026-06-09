@@ -51,6 +51,13 @@ async def run_pipeline(
             (run_id,),
         )
         db._conn.commit()  # type: ignore[attr-defined]
+        # Recover tasks that were mid-execution when the process crashed:
+        # the Hunt stage sets status='running' at dispatch and only flips
+        # to 'done'/'failed' on completion. If the process died in between,
+        # those tasks are orphaned — get_pending_tasks() won't see them.
+        recovered = db.reset_running_tasks(run_id)
+        if recovered:
+            log.info("[%s] recovered %d running task(s) → pending", run_id, recovered)
         log.info("[%s] resuming existing run", run_id)
     else:
         raise RuntimeError(

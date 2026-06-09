@@ -261,6 +261,23 @@ class StateDB:
         )
         self._conn.commit()
 
+    def reset_running_tasks(self, run_id: str) -> int:
+        """Flip any 'running' tasks back to 'pending'.
+
+        Use when resuming a run that was interrupted mid-pipeline: the
+        orchestrator only dispatches 'pending' tasks, so tasks stuck in
+        'running' after a crash would otherwise never be re-executed.
+
+        Returns the number of tasks changed.
+        """
+        with self._conn:
+            cur = self._conn.execute(
+                "UPDATE tasks SET status = 'pending', updated_at = ? "
+                "WHERE run_id = ? AND status = 'running'",
+                (time.time(), run_id),
+            )
+            return cur.rowcount
+
     def get_failed_tasks(self, run_id: str) -> list[Task]:
         rows = self._conn.execute(
             "SELECT * FROM tasks WHERE run_id = ? AND status = 'failed' "
