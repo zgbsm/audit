@@ -83,6 +83,10 @@ async def run_pipeline(
         recon_kwargs = {} if max_recon_tasks is None else {"max_tasks": max_recon_tasks}
         await stages.run_recon(ctx, db, **recon_kwargs)
 
+        # ---- Stage 1b: Merge similar pending tasks ----
+        _budget_check("merge")
+        await stages.run_merge_tasks(ctx, db)
+
         # ---- Stages 2-3-4 loop: Hunt → Validate → Gapfill ----
         # Budget = min(per_run + 1, max_iterations - already_used). The +1
         # preserves the legacy `range(gapfill_iterations + 1)` semantic.

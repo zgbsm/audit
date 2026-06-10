@@ -269,6 +269,96 @@ def recover(run_id: str, yes: bool) -> None:
         db.close()
 
 
+@main.command("merge-tasks")
+@click.option("--run-id", required=True, help="Run whose pending tasks to merge.")
+@click.option("--yes", is_flag=True,
+              help="Actually apply the merge (default is dry-run).")
+def merge_tasks(run_id: str, yes: bool) -> None:
+    """Use AI to merge similar pending tasks into fewer, broader ones.
+
+    Displays the current pending task queue and runs the merge agent
+    to identify redundant tasks. Pass --yes to apply the consolidation
+    (deletes old pending tasks, inserts the merged list).
+
+    Only touches tasks with status='pending'. Already-running, done,
+    and failed tasks are never modified.
+    """
+    from audit.config import load_config
+    from audit.stages._common import StageContext
+    from audit.stages.merge_tasks import MIN_TASKS_TO_MERGE, run_merge_tasks
+
+    db = StateDB(DB_PATH)
+    try:
+        run = db.get_run(run_id)
+        if run is None:
+            console.print(f"[red]unknown run_id {run_id!r}[/red]")
+            sys.exit(1)
+        if run["status"] == "running":
+            console.print(
+                f"[yellow]warning:[/yellow] run {run_id} is marked 'running' — "
+                f"proceeding (typical when a previous orchestrator crashed "
+                f"and left the run in a stuck state)"
+            )
+
+        pending = db.get_pending_tasks(run_id)
+        if not pending:
+            console.print(f"[green]no pending tasks in {run_id}[/green]")
+            return
+
+        # Show current pending queue
+        t = Table(
+            title=f"pending tasks in {run_id} ({len(pending)})",
+            show_lines=False,
+        )
+        t.add_column("task_id")
+        t.add_column("attack_class")
+        t.add_column("priority", justify="right")
+        t.add_column("target_files")
+        t.add_column("rationale")
+        for task in pending:
+            t.add_row(
+                task.task_id,
+                task.attack_class,
+                str(task.priority),
+                ", ".join(task.target_files[:2]),
+                task.rationale[:80],
+            )
+        console.print(t)
+
+        if len(pending) < MIN_TASKS_TO_MERGE:
+            console.print(
+                f"[yellow]only {len(pending)} pending tasks "
+                f"(minimum {MIN_TASKS_TO_MERGE} for merge) — nothing to do[/yellow]"
+            )
+            return
+
+        if not yes:
+            console.print(
+                "[yellow]dry-run[/yellow] pass --yes to run the merge agent. "
+                f"Then: [cyan]audit run --resume --run-id {run_id}[/cyan]"
+            )
+            return
+
+        config = load_config()
+        ctx = StageContext(
+            run_id=run_id,
+            repo_path=Path(run["repo_path"]),
+            config=config,
+        )
+        saved = asyncio.run(run_merge_tasks(ctx, db))
+        if saved > 0:
+            console.print(
+                f"[green]merged: removed {saved} redundant task(s)[/green]"
+            )
+            console.print(
+                f"next: [cyan]audit run --resume --run-id {run_id}[/cyan]"
+            )
+        else:
+            console.print("[yellow]merge produced no reduction[/yellow]")
+    finally:
+        db.close()
+
+
 @main.command("report")
 @click.option("--run-id", required=True)
 @click.option("--format", "fmt", type=click.Choice(["json", "md"]), default="json")

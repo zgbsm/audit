@@ -8,6 +8,7 @@ from audit.stages.gapfill import run_gapfill
 from audit.stages.dedupe import run_dedupe
 from audit.stages.trace import run_trace
 from audit.stages.feedback import run_feedback
+from audit.stages.merge_tasks import run_merge_tasks
 from audit.stages.report import run_report
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "run_trace",
     "run_feedback",
     "run_report",
+    "run_merge_tasks",
 ]

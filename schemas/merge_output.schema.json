@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MergeOutput",
+  "description": "Consolidated task list after merging similar pending tasks.",
+  "type": "object",
+  "required": ["merged_tasks"],
+  "additionalProperties": false,
+  "properties": {
+    "merged_tasks": {
+      "type": "array",
+      "description": "The consolidated task list. Every original pending task must be represented — either kept as-is or merged into a broader task. Never silently drop a task.",
+      "items": { "$ref": "hunt_task.schema.json" }
+    },
+    "merge_notes": {
+      "type": "array",
+      "description": "Records which original tasks were merged together so the operator can audit the consolidation.",
+      "items": {
+        "type": "object",
+        "required": ["original_task_ids", "merged_into", "rationale"],
+        "additionalProperties": false,
+        "properties": {
+          "original_task_ids": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "type": "string" },
+            "description": "Two or more task_ids that were collapsed into one."
+          },
+          "merged_into": {
+            "type": "string",
+            "description": "The task_id of the consolidated task that replaces them."
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Why these tasks were merged — shared attack class, overlapping target files, same trust boundary, etc."
+          }
+        }
+      }
+    }
+  }
+}

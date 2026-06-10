@@ -261,6 +261,20 @@ class StateDB:
         )
         self._conn.commit()
 
+    def delete_pending_tasks(self, run_id: str) -> int:
+        """Delete all pending tasks for a run. Returns the count removed.
+
+        Use when replacing the pending queue wholesale (e.g. after a merge
+        operation). Only tasks with status='pending' are removed; done /
+        failed / running tasks are never touched.
+        """
+        cur = self._conn.execute(
+            "DELETE FROM tasks WHERE run_id = ? AND status = 'pending'",
+            (run_id,),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
     def reset_running_tasks(self, run_id: str) -> int:
         """Flip any 'running' tasks back to 'pending'.
 

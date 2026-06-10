@@ -173,3 +173,31 @@ def test_recover_failed_tasks(tmp_path: Path) -> None:
     # Re-running on a clean slate is a no-op (nothing failed)
     assert db.recover_failed_tasks(rid) == []
     db.close()
+
+
+def test_delete_pending_tasks(tmp_path: Path) -> None:
+    db = StateDB(tmp_path / "state.db")
+    rid = db.create_run("/r", "test_run")
+    db.add_task(rid, {"task_id": "t_1", "attack_class": "sqli",
+                      "scope_hint": "x", "target_files": ["a.py"],
+                      "rationale": "raw f-string", "priority": 1,
+                      "source": "recon"})
+    db.add_task(rid, {"task_id": "t_2", "attack_class": "xss",
+                      "scope_hint": "y", "target_files": ["b.py"],
+                      "rationale": "unescaped", "priority": 2,
+                      "source": "recon"})
+    db.add_task(rid, {"task_id": "t_3", "attack_class": "ssrf",
+                      "scope_hint": "z", "target_files": ["c.py"],
+                      "rationale": "user url", "priority": 3,
+                      "source": "recon"})
+    db.update_task_status("t_1", "done")
+    db.update_task_status("t_2", "failed")
+    # t_3 is pending
+
+    n = db.delete_pending_tasks(rid)
+    assert n == 1  # only t_3 was pending
+    statuses = {t.task_id: t.status for t in db.get_all_tasks(rid)}
+    assert statuses == {"t_1": "done", "t_2": "failed"}
+    # Re-running is a no-op
+    assert db.delete_pending_tasks(rid) == 0
+    db.close()
