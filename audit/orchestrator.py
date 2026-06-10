@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any, Callable
 
 from audit import stages
 from audit.config import HarnessConfig
@@ -31,6 +32,7 @@ async def run_pipeline(
     max_recon_tasks: int | None = None,
     live_target: dict | None = None,
     scope_notes: str | None = None,
+    stream_callback: Callable[[dict], None] | None = None,
 ) -> Path:
     ctx = StageContext(
         run_id=run_id,
@@ -38,6 +40,7 @@ async def run_pipeline(
         config=config,
         live_target=live_target,
         scope_notes=scope_notes,
+        stream_callback=stream_callback,
     )
 
     if db.get_run(run_id) is None:

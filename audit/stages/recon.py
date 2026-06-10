@@ -36,11 +36,8 @@ async def run_recon(ctx: StageContext, db: StateDB, max_tasks: int = DEFAULT_MAX
         artifact_dir=ctx.results_dir("recon"),
         artifact_name="recon",
         repair_attempts=sc.repair_attempts,
+        stream_callback=ctx.stream_callback,
     )
-
-    payload = result.payload
-    db.save_recon_output(ctx.run_id, payload)
-    db.record_cost(ctx.run_id, "recon", None, result.raw_result_message)
     db.add_artifact(ctx.run_id, "recon", None, "jsonl", str(result.artifact_path))
 
     for task in payload.get("initial_tasks", []):

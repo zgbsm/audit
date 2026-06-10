@@ -125,12 +125,16 @@ def auth_check(allow_api_key: bool) -> None:
 @click.option("--allow-api-key", is_flag=True, default=False,
               help="Honor ANTHROPIC_API_KEY for metered Anthropic billing "
                    "(also via AUDIT_ALLOW_API_KEY=1).")
+@click.option("--stream", is_flag=True, default=False,
+              help="Print every AI message in real-time (thinking, tool use, "
+                   "tool results, text responses).")
 def run(repo: str, run_id: str | None, resume: bool, max_cost_usd: float | None,
         max_concurrency: int | None, max_recon_tasks: int | None,
         target_url: str | None, target_creds: tuple[str, ...],
         scope_notes_path: str | None,
         config_path: str | None,
-        allow_api_key: bool) -> None:
+        allow_api_key: bool,
+        stream: bool) -> None:
     """Run the full 8-stage pipeline against a target repo."""
     allow = _allow_api_key_from_env_or_flag(allow_api_key)
     try:
@@ -168,6 +172,8 @@ def run(repo: str, run_id: str | None, resume: bool, max_cost_usd: float | None,
     run_id = run_id or f"run_{uuid.uuid4().hex[:8]}"
     repo_path = Path(repo).resolve()
 
+    stream_callback = _make_stream_callback(console) if stream else None
+
     db = StateDB(DB_PATH)
     try:
         report = asyncio.run(run_pipeline(
@@ -180,6 +186,7 @@ def run(repo: str, run_id: str | None, resume: bool, max_cost_usd: float | None,
             max_recon_tasks=max_recon_tasks,
             live_target=live_target,
             scope_notes=scope_notes,
+            stream_callback=stream_callback,
         ))
         console.print(f"[green]done[/green] run_id={run_id} report={report}")
     except CostExceeded as e:
@@ -359,6 +366,71 @@ def _render_markdown_report(report: dict) -> str:
         lines.append("---")
         lines.append("")
     return "\n".join(lines)
+
+
+def _make_stream_callback(console: Console):
+    """Return a callback that pretty-prints each AI message in real time."""
+    from rich.panel import Panel
+    from rich.syntax import Syntax
+    import json as _json
+
+    # Track tool-use IDs so we can label tool results
+    tool_names: dict[str, str] = {}
+
+    def _on_msg(msg: dict) -> None:
+        kind = msg.get("kind", "?")
+        if kind == "assistant":
+            model = msg.get("model", "?")
+            for block in msg.get("content", []):
+                if block.get("type") == "thinking":
+                    text = block.get("thinking", "")
+                    prefix = f"[dim]🤔 {model} thinking"
+                    console.print(
+                        Panel(text[:2000], title=prefix,
+                              border_style="dim", padding=(0, 1)),
+                    )
+                elif block.get("type") == "tool_use":
+                    tool_id = block.get("id", "")
+                    tool_name = block.get("name", "?")
+                    tool_names[tool_id] = tool_name
+                    inp = block.get("input", {})
+                    inp_str = _json.dumps(inp, ensure_ascii=False, indent=2)
+                    console.print(
+                        Panel(Syntax(inp_str[:4000], "json", theme="monokai"),
+                              title=f"🔧 {model} → {tool_name}",
+                              border_style="cyan", padding=(0, 1)),
+                    )
+                elif block.get("type") == "text":
+                    text = block.get("text", "")
+                    prefix = f"💬 {model}"
+                    if len(text) <= 200:
+                        console.print(f"[bold green]{prefix}[/bold green] {text}")
+                    else:
+                        console.print(
+                            Panel(text[:3000], title=prefix,
+                                  border_style="green", padding=(0, 1)),
+                        )
+                elif block.get("type") == "tool_result":
+                    tool_use_id = block.get("tool_use_id", "")
+                    tool_name = tool_names.get(tool_use_id, "?")
+                    content = block.get("content", "")
+                    is_err = block.get("is_error", False)
+                    style = "red" if is_err else "dim"
+                    label = f"📤 {tool_name} result"
+                    console.print(
+                        Panel(str(content)[:2000], title=label,
+                              title_align="left",
+                              border_style=style, padding=(0, 1)),
+                    )
+        elif kind == "result":
+            cost = msg.get("total_cost_usd")
+            turns = msg.get("num_turns")
+            console.print(
+                f"[bold blue]✓[/bold blue] done  "
+                f"[dim]turns={turns}  cost=${cost:.4f}[/dim]"
+            )
+
+    return _on_msg
 
 
 if __name__ == "__main__":

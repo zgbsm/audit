@@ -80,6 +80,7 @@ async def run_hunt(
                     artifact_dir=ctx.results_dir("hunt"),
                     artifact_name=task.task_id,
                     repair_attempts=sc.repair_attempts,
+                    stream_callback=ctx.stream_callback,
                 )
             except (AgentRunError, TransientAgentError) as e:
                 log.warning("[%s] hunt task %s failed: %s", ctx.run_id, task.task_id, e)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable
 
 from audit.config import HarnessConfig, StageConfig
 
@@ -23,6 +24,8 @@ class StageContext:
     # Optional operator context — when set, downstream prompts use them.
     live_target: dict | None = None    # {"url": "...", "credentials": {...}}
     scope_notes: str | None = None     # verbatim text appended to user_input
+    # Optional streaming hook — fires on every AI message received.
+    stream_callback: Callable[[dict], None] | None = None
 
     def stage(self, name: str) -> StageConfig:
         return self.config.get(name)

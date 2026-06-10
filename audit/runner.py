@@ -21,7 +21,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -117,6 +117,7 @@ async def run_agent(
     repair_attempts: int = 1,
     transient_retries: int = 3,
     transient_base_delay: float = 30.0,
+    stream_callback: Callable[[dict], None] | None = None,
 ) -> AgentResult:
     """Run one agent, retrying transient API errors with exponential backoff.
 
@@ -143,6 +144,7 @@ async def run_agent(
                 artifact_dir=artifact_dir,
                 artifact_name=artifact_name,
                 repair_attempts=repair_attempts,
+                stream_callback=stream_callback,
             )
         except QuotaExhaustedError:
             raise
@@ -176,6 +178,7 @@ async def _run_agent_once(
     artifact_dir: Path,
     artifact_name: str,
     repair_attempts: int,
+    stream_callback: Callable[[dict], None] | None = None,
 ) -> AgentResult:
     """Single attempt. Raises TransientAgentError / QuotaExhaustedError
     before schema validation if the API returned is_error=True."""
@@ -228,7 +231,7 @@ async def _run_agent_once(
 
         try:
             await client.query(initial_prompt)
-            last_text, last_result_msg = await _drain(client, art)
+            last_text, last_result_msg = await _drain(client, art, stream_callback)
 
             # Before schema validation: was this a real model response, or
             # did the CLI surface an API error as the assistant text?
@@ -249,7 +252,7 @@ async def _run_agent_once(
                 repair_prompt = _build_repair_prompt(last_text, errors, schema_file)
                 _write_artifact(art, {"kind": "repair_request", "text": repair_prompt[:50000]})
                 await client.query(repair_prompt)
-                last_text, last_result_msg = await _drain(client, art)
+                last_text, last_result_msg = await _drain(client, art, stream_callback)
                 # An API error on the repair turn is also retry-worthy.
                 if last_result_msg.get("is_error"):
                     label, exc_cls = _classify_api_error(last_text)
@@ -291,16 +294,24 @@ async def _run_agent_once(
     )
 
 
-async def _drain(client: ClaudeSDKClient, art) -> tuple[str, dict[str, Any]]:
+async def _drain(
+    client: ClaudeSDKClient,
+    art,
+    stream_callback: Callable[[dict], None] | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Consume the response stream, write each message to the JSONL
     artifact, and return (concatenated assistant text from last
-    assistant message, result_message_dict)."""
+    assistant message, result_message_dict). If *stream_callback* is
+    provided, each serialized message is also sent to it immediately."""
     text_chunks: list[str] = []
     result_msg: dict[str, Any] = {}
     last_assistant_text: list[str] = []
 
     async for msg in client.receive_response():
-        _write_artifact(art, _serialize_message(msg))
+        serialized = _serialize_message(msg)
+        _write_artifact(art, serialized)
+        if stream_callback is not None:
+            stream_callback(serialized)
         if isinstance(msg, AssistantMessage):
             last_assistant_text = []
             for block in msg.content:
