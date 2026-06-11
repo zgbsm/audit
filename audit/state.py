@@ -519,17 +519,17 @@ class StateDB:
     def increment_loop_counter(self, run_id: str, loop_name: str) -> int:
         """Atomically +1 via UPSERT and return the new count."""
         now = time.time()
-        cur = self._conn.execute(
-            """INSERT INTO loop_counters (run_id, loop_name, iter_count, last_iter_at)
-               VALUES (?, ?, 1, ?)
-               ON CONFLICT(run_id, loop_name) DO UPDATE SET
-                 iter_count = loop_counters.iter_count + 1,
-                 last_iter_at = excluded.last_iter_at
-               RETURNING iter_count""",
-            (run_id, loop_name, now),
-        )
-        self._conn.commit()
-        return int(cur.fetchone()["iter_count"])
+        with self._conn:
+            cur = self._conn.execute(
+                """INSERT INTO loop_counters (run_id, loop_name, iter_count, last_iter_at)
+                   VALUES (?, ?, 1, ?)
+                   ON CONFLICT(run_id, loop_name) DO UPDATE SET
+                     iter_count = loop_counters.iter_count + 1,
+                     last_iter_at = excluded.last_iter_at
+                   RETURNING iter_count""",
+                (run_id, loop_name, now),
+            )
+            return int(cur.fetchone()["iter_count"])
 
     # ---------- artifacts ----------
 

@@ -33,6 +33,7 @@ from claude_agent_sdk import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from claude_agent_sdk._errors import MessageParseError
 
 from audit.json_utils import extract_json, validate_schema
 
@@ -307,19 +308,28 @@ async def _drain(
     result_msg: dict[str, Any] = {}
     last_assistant_text: list[str] = []
 
-    async for msg in client.receive_response():
-        serialized = _serialize_message(msg)
-        _write_artifact(art, serialized)
-        if stream_callback is not None:
-            stream_callback(serialized)
-        if isinstance(msg, AssistantMessage):
-            last_assistant_text = []
-            for block in msg.content:
-                if isinstance(block, TextBlock):
-                    last_assistant_text.append(block.text)
-            text_chunks.append("".join(last_assistant_text))
-        elif isinstance(msg, ResultMessage):
-            result_msg = _result_to_dict(msg)
+    try:
+        async for msg in client.receive_response():
+            serialized = _serialize_message(msg)
+            _write_artifact(art, serialized)
+            if stream_callback is not None:
+                stream_callback(serialized)
+            if isinstance(msg, AssistantMessage):
+                last_assistant_text = []
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        last_assistant_text.append(block.text)
+                text_chunks.append("".join(last_assistant_text))
+            elif isinstance(msg, ResultMessage):
+                result_msg = _result_to_dict(msg)
+    except MessageParseError as e:
+        # The Claude CLI subprocess died mid-message (e.g. OOM kill,
+        # SIGTERM) and left a partial / truncated JSON line behind.
+        # Treat this as transient — the retry loop in run_agent will
+        # re-launch the subprocess and try again.
+        raise TransientAgentError(
+            f"claude subprocess output truncated (likely OOM / SIGTERM): {e}"
+        ) from e
 
     final_text = "".join(last_assistant_text) if last_assistant_text else (
         text_chunks[-1] if text_chunks else ""
