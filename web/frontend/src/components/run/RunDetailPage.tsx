@@ -88,9 +88,13 @@ export function RunDetailPage() {
   });
 
   const handleCancel = async () => {
-    if (runId && confirm('Cancel this run?')) {
-      await cancelRun(runId);
+    if (!runId || !confirm('Cancel this run?')) return;
+    try {
+      const res = await cancelRun(runId);
+      alert(res.detail || `Run ${runId}: ${res.status}`);
       refetch();
+    } catch (e) {
+      alert(`Cancel failed: ${(e as Error).message}`);
     }
   };
 
@@ -226,12 +230,10 @@ export function RunDetailPage() {
         <PipelineProgress stages={wsStages} />
       </ErrorBoundary>
 
-      {/* Stream viewer (only for active runs) */}
-      {isActive && (
-        <ErrorBoundary>
-          <StreamViewer runId={runId!} />
-        </ErrorBoundary>
-      )}
+      {/* Stream viewer — always visible, shows latest 5 messages */}
+      <ErrorBoundary>
+        <StreamViewer runId={runId!} />
+      </ErrorBoundary>
 
       {/* Tasks */}
       <ErrorBoundary>

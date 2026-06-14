@@ -168,10 +168,22 @@ async def get_run(run_id: str):
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(run_id: str):
     """Cancel a running pipeline."""
-    if not run_manager.is_running(run_id):
-        raise HTTPException(status_code=409, detail=f"Run {run_id!r} is not running")
-    run_manager.cancel(run_id)
-    return {"status": "cancelling", "run_id": run_id}
+    if run_manager.is_running(run_id):
+        run_manager.cancel(run_id)
+        return {"status": "cancelling", "run_id": run_id}
+
+    # Run not tracked in-memory — may be orphaned after server restart.
+    # If the DB still says 'running', flip it to 'aborted' so the UI
+    # doesn't show a stuck cancel button.
+    db = _get_db()
+    try:
+        run = db.get_run(run_id)
+        if run and run["status"] == "running":
+            db.finish_run(run_id, "aborted")
+            return {"status": "aborted", "run_id": run_id, "detail": "Run was orphaned (server restart?) — marked as aborted"}
+    finally:
+        db.close()
+    raise HTTPException(status_code=409, detail=f"Run {run_id!r} is not running")
 
 
 @router.post("/runs/{run_id}/resume", response_model=RunSummary, status_code=202)

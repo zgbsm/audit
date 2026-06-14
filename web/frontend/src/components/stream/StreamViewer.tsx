@@ -47,7 +47,7 @@ export function StreamViewer({ runId, className }: Props) {
       if (event.type === 'stream_message') {
         const data = event.data as StreamMessage;
         if (!paused) {
-          setMessages((prev) => [...prev.slice(-200), data]); // keep last 200
+          setMessages((prev) => [...prev.slice(-4), data]); // keep latest 5
         }
       }
     },
@@ -64,8 +64,8 @@ export function StreamViewer({ runId, className }: Props) {
     return (
       <div className={`glass-panel p-4 ${className ?? ''}`}>
         <h3 className="text-sm font-medium text-slate-300 mb-2">AI Stream</h3>
-        <p className="text-sm text-slate-600 text-center py-8">
-          Waiting for activity...
+        <p className="text-sm text-slate-600 text-center py-4">
+          No messages yet — stream will appear when the pipeline starts
         </p>
       </div>
     );
@@ -75,10 +75,10 @@ export function StreamViewer({ runId, className }: Props) {
     <div className={`glass-panel flex flex-col ${className ?? ''}`}>
       <div className="p-3 border-b border-slate-700/50 flex items-center justify-between flex-shrink-0">
         <h3 className="text-sm font-medium text-slate-300">AI Stream</h3>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">{messages.length} messages</span>
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <span>latest {Math.min(messages.length, 5)} message(s)</span>
           <button
-            className={`text-xs px-2 py-1 rounded ${
+            className={`px-2 py-1 rounded ${
               paused ? 'bg-yellow-500/20 text-yellow-400' : 'bg-slate-800 text-slate-400'
             }`}
             onClick={() => setPaused(!paused)}
@@ -88,8 +88,8 @@ export function StreamViewer({ runId, className }: Props) {
         </div>
       </div>
 
-      <div ref={containerRef} className="flex-1 overflow-y-auto p-3 space-y-2 max-h-[500px]">
-        {messages.slice(-50).map((msg, i) => (
+      <div ref={containerRef} className="flex-1 overflow-y-auto p-3 space-y-2 max-h-[400px]">
+        {messages.map((msg, i) => (
           <StreamMessageView key={i} msg={msg} />
         ))}
       </div>
