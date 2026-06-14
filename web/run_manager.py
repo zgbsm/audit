@@ -101,11 +101,18 @@ class RunManager:
         return run_id
 
     def cancel(self, run_id: str) -> bool:
-        """Request cancellation of a running pipeline. Returns True if found."""
+        """Force-cancel a running pipeline. Returns True if found.
+
+        Sets the cancel_event (for cooperative checks) AND calls
+        task.cancel() to immediately inject CancelledError into the
+        running coroutine — the pipeline stops without waiting for
+        the current LLM call to finish.
+        """
         handle = self._runs.get(run_id)
         if handle is None:
             return False
-        handle.cancel()
+        handle.cancel_event.set()
+        handle.task.cancel()
         log.info("run_manager: cancel requested for %s", run_id)
         return True
 
@@ -166,6 +173,7 @@ async def _run_pipeline_wrapper(
         )
 
     except asyncio.CancelledError:
+        db.reset_running_tasks(run_id)  # so they can be retried on resume
         db.finish_run(run_id, "aborted")
         observer.on_run_complete(run_id, status="aborted", total_cost=db.total_cost(run_id))
         log.warning("[%s] pipeline cancelled", run_id)
