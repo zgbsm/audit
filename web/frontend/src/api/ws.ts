@@ -11,7 +11,7 @@ interface UseWebSocketOptions {
 
 export function useWebSocket({ runId, onMessage, onOpen, onClose, enabled = true }: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
-  const pingRef = useRef<ReturnType<typeof setInterval>>();
+  const pingRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const connect = useCallback(() => {
     if (!runId || !enabled) return;

@@ -15,11 +15,12 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Path aliases */
+    /* Path aliases — Vite resolves @/ at build time */
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
+    "ignoreDeprecations": "6.0",
 
     /* Linting */
     "noUnusedLocals": false,

@@ -7,7 +7,11 @@ interface StreamMessage {
   kind: string;
   model?: string;
   content?: StreamBlock[];
-  data?: Record<string, unknown>;
+  data?: {
+    num_turns?: number;
+    total_cost_usd?: number;
+    [key: string]: unknown;
+  };
   text?: string;
   name?: string;
   input?: Record<string, unknown>;
@@ -140,7 +144,7 @@ function StreamMessageView({ msg }: { msg: StreamMessage }) {
         <FileOutput className="h-3 w-3 text-green-400" />
         <span className="text-green-400">Done</span>
         <span className="text-slate-500">
-          turns={msg.data?.num_turns ?? '?'} cost=${(msg.data?.total_cost_usd as number)?.toFixed(4) ?? '?'}
+          turns={msg.data?.num_turns ?? '?'} cost=${msg.data?.total_cost_usd != null ? Number(msg.data.total_cost_usd).toFixed(4) : '?'}
         </span>
       </div>
     );
