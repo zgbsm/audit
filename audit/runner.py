@@ -18,6 +18,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -200,6 +201,20 @@ async def _run_agent_once(
         "`additionalProperties: false`.\n\n"
         f"```json\n{schema_text}\n```\n"
     )
+    # Forward auth-related env vars explicitly so the Claude CLI subprocess
+    # always sees them, regardless of environment-inheritance edge cases
+    # (e.g. web-server process contexts where the token is set via .env after
+    # the server started). Without this, the CLI may prompt "Not logged in".
+    _auth_env: dict[str, str] = {}
+    for _key in (
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+    ):
+        _val = os.environ.get(_key)
+        if _val:
+            _auth_env[_key] = _val
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
         allowed_tools=allowed_tools,
@@ -208,6 +223,7 @@ async def _run_agent_once(
         cwd=str(cwd),
         add_dirs=[str(p) for p in (add_dirs or [])],
         permission_mode=permission_mode,
+        env=_auth_env,
     )
 
     initial_prompt = json.dumps(user_input, ensure_ascii=False)
