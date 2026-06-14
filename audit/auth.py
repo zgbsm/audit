@@ -73,6 +73,10 @@ class AuthError(RuntimeError):
 
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 
+# Project root derived from this module's location (audit/auth.py → 2 levels up).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ENV = _PROJECT_ROOT / ".env"
+
 
 def _is_gateway_base(url: str) -> bool:
     """A non-empty BASE_URL that doesn't point at canonical Anthropic
@@ -104,6 +108,8 @@ def configure_auth(
     """
     if env_file is not None and env_file.exists():
         load_dotenv(env_file)
+    elif _PROJECT_ENV.exists():
+        load_dotenv(_PROJECT_ENV)
     else:
         load_dotenv()
 
