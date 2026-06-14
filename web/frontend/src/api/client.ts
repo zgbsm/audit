@@ -50,7 +50,7 @@ export function startRun(data: RunCreateRequest): Promise<RunSummary> {
   });
 }
 
-export function cancelRun(runId: string): Promise<{ status: string; run_id: string }> {
+export function cancelRun(runId: string): Promise<{ status: string; run_id: string; detail?: string }> {
   return request(`/runs/${runId}/cancel`, { method: 'POST' });
 }
 
