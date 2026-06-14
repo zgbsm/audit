@@ -32,6 +32,8 @@ When merging N tasks into 1:
 
 ## Output
 
-Emit a JSON object matching the schema. The `merged_tasks` array must contain the
-final consolidated task list. The `merge_notes` array must document every merge group.
-Tasks that were NOT merged should still appear in `merged_tasks` unchanged.
+Do **not** output JSON directly.  Call the **`submit_merge_result`**
+tool with your `merged_tasks` and `merge_notes`.  Call it exactly once.
+
+If the tool is unavailable, emit a single JSON object matching the
+merge_output schema — no prose, no markdown fence.

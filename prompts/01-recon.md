@@ -47,8 +47,13 @@ Read, Grep, Glob, Bash (read-only inspection only).
 
 # Output
 
-A single JSON object matching `schemas/recon_output.schema.json`. No
-prose, no markdown fence, no commentary — just the JSON.
+Do **not** output JSON directly.  When your analysis is complete, call
+the **`submit_recon_result`** tool with your results.  The tool accepts
+the same shape as the ``recon_output`` schema — subsystems,
+architecture, and initial_tasks.  Call it exactly once at the end.
+
+If the tool is unavailable for any reason, fall back to emitting a
+single JSON object — no prose, no markdown fence, no commentary.
 
 # Method
 
@@ -122,4 +127,4 @@ prose, no markdown fence, no commentary — just the JSON.
   the operator has explicitly placed out of scope.
 - The output **must** parse against the schema. Re-read it before emitting.
 - Do not produce more than `max_tasks` tasks.
-- Do not emit prose — just JSON.
+- Use the `submit_recon_result` tool to submit your output.  Do not emit prose — call the tool.

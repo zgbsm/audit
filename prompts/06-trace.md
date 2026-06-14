@@ -48,7 +48,10 @@ only that host) to confirm reachability.
 
 # Output
 
-A single JSON object matching `schemas/trace.schema.json`. No prose.
+Do **not** output JSON directly.  Call the **`submit_trace_result`**
+tool with your reachability analysis.  Call it exactly once.
+
+Fallback: a single JSON object — no prose.
 
 # Method
 
@@ -87,4 +90,4 @@ A single JSON object matching `schemas/trace.schema.json`. No prose.
 - If you cannot complete the trace within reasonable token budget,
   emit `reachable: false` with a blocker of kind `other` describing
   what's missing. Don't fabricate.
-- Output must validate against the schema. No prose.
+- Use the `submit_trace_result` tool to submit.

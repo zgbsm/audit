@@ -49,7 +49,11 @@ mode (no Bash) otherwise.
 
 # Output
 
-A single JSON object matching `schemas/validation.schema.json`. No prose.
+Do **not** output JSON directly.  Call the **`submit_validation_result`**
+tool with your verdict, rationale, alternative_explanation, and
+validator_confidence.  Call it exactly once at the end.
+
+Fallback: a single JSON object — no prose, no markdown fence.
 
 # Method
 
@@ -90,4 +94,4 @@ A single JSON object matching `schemas/validation.schema.json`. No prose.
   confirmed` (the rival hypothesis you ruled out).
 - A high `validator_confidence` on `rejected` should reflect that the
   benign explanation is rigorously correct, not just plausible.
-- Output must validate against the schema. No prose, no markdown fence.
+- Use the `submit_validation_result` tool to submit.

@@ -33,8 +33,10 @@ Read, Grep, Glob.
 
 # Output
 
-A single JSON object matching `schemas/feedback_output.schema.json`. No
-prose.
+Do **not** output JSON directly.  Call the **`submit_feedback_result`**
+tool with your new_hunt_tasks and rationale_per_task.  Call it exactly once.
+
+Fallback: a single JSON object — no prose.
 
 # Method
 
@@ -67,4 +69,4 @@ prose.
   `reachable_traces`.
 - `rationale_per_task[task_id]` must name which trace pattern motivated
   the task.
-- Output must validate against the schema. No prose.
+- Use the `submit_feedback_result` tool to submit.

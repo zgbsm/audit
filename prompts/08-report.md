@@ -35,7 +35,10 @@ Read.
 
 # Output
 
-A single JSON object matching `schemas/report.schema.json`. No prose.
+Do **not** output JSON directly.  Call the **`submit_report_result`**
+tool with your findings and summary.  Call it exactly once.
+
+Fallback: a single JSON object — no prose, no markdown fence.
 
 # Method
 
@@ -71,4 +74,4 @@ A single JSON object matching `schemas/report.schema.json`. No prose.
 - No editorial commentary, no exec summary prose. The consumer is a
   parser.
 - All severities must be one of: critical, high, medium, low, informational.
-- Output must validate against the schema. No prose, no markdown fence.
+- Use the `submit_report_result` tool to submit.

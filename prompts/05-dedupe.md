@@ -28,8 +28,10 @@ Read.
 
 # Output
 
-A single JSON object matching `schemas/dedupe_output.schema.json`. No
-prose.
+Do **not** output JSON directly.  Call the **`submit_dedupe_result`**
+tool with your groups.  Call it exactly once.
+
+Fallback: a single JSON object — no prose.
 
 # Method
 
@@ -56,4 +58,4 @@ prose.
   `member_finding_ids`. No drops, no duplicates.
 - `group_id` format: `g_<canonical_finding_id_short>`.
 - Singletons are allowed (a group of one).
-- Output must validate against the schema. No prose.
+- Use the `submit_dedupe_result` tool to submit.

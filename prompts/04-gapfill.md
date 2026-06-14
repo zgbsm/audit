@@ -30,8 +30,10 @@ Read, Grep, Glob.
 
 # Output
 
-A single JSON object matching `schemas/gapfill_output.schema.json`. No
-prose.
+Do **not** output JSON directly.  Call the **`submit_gapfill_result`**
+tool with your new_tasks and coverage_analysis.  Call it exactly once.
+
+Fallback: a single JSON object — no prose.
 
 # Method
 
@@ -61,4 +63,4 @@ prose.
 - Each new task's `task_id` starts with `t_gf_` (gapfill source).
 - Set `source: "gapfill"` on each task.
 - Set `priority` as an integer 1–5 (1 = highest), not a string.
-- Output must validate against the schema. No prose.
+- Use the `submit_gapfill_result` tool to submit.

@@ -51,8 +51,12 @@ ephemeral local servers) is fine.
 
 # Output
 
-A single JSON object matching `schemas/finding.schema.json`. The shape
-is `{task_id, findings: [...], gaps_observed: [...]}`. No prose.
+Do **not** output JSON directly.  When your hunt is complete, call the
+**`submit_hunt_result`** tool with your findings and gaps_observed.
+Call it exactly once at the end.
+
+If the tool is unavailable, fall back to emitting a single JSON object
+matching the `finding` schema — no prose, no markdown fence.
 
 # Method
 
@@ -115,6 +119,6 @@ is `{task_id, findings: [...], gaps_observed: [...]}`. No prose.
 - All paths in `findings[*].file` are repo-relative, not absolute.
 - If `scope_notes` lists this attack class or this code region as out of
   scope, emit zero findings and explain in `gaps_observed`.
-- Output must validate against the schema. No prose, no markdown fence.
+- Output must validate against the schema. Use `submit_hunt_result` to submit.
 - Stay within your scope. Do not refactor unrelated logic, do not
   comment on style.

@@ -37,6 +37,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk._errors import MessageParseError
 
 from audit.json_utils import extract_json, validate_schema
+from audit.tools import create_submit_tool_server, get_result as get_tool_result, tool_name_for_stage
 
 log = logging.getLogger(__name__)
 
@@ -120,6 +121,7 @@ async def run_agent(
     transient_retries: int = 3,
     transient_base_delay: float = 30.0,
     stream_callback: Callable[[dict], None] | None = None,
+    use_submit_tool: bool = True,
 ) -> AgentResult:
     """Run one agent, retrying transient API errors with exponential backoff.
 
@@ -147,6 +149,7 @@ async def run_agent(
                 artifact_name=artifact_name,
                 repair_attempts=repair_attempts,
                 stream_callback=stream_callback,
+                use_submit_tool=use_submit_tool,
             )
         except QuotaExhaustedError:
             raise
@@ -181,6 +184,7 @@ async def _run_agent_once(
     artifact_name: str,
     repair_attempts: int,
     stream_callback: Callable[[dict], None] | None = None,
+    use_submit_tool: bool = True,
 ) -> AgentResult:
     """Single attempt. Raises TransientAgentError / QuotaExhaustedError
     before schema validation if the API returned is_error=True."""
@@ -188,23 +192,40 @@ async def _run_agent_once(
     artifact_path = artifact_dir / f"{artifact_name}.jsonl"
     cwd.mkdir(parents=True, exist_ok=True)
 
+    # ---- Build MCP submit tool (when enabled) ----
+    submit_tool_name = tool_name_for_stage(stage) if use_submit_tool else None
+    mcp_servers: dict[str, Any] = {}
+    if submit_tool_name is not None:
+        try:
+            mcp_servers = create_submit_tool_server(stage)
+            log.debug("[%s/%s] submit tool enabled: %s", stage, artifact_name, submit_tool_name)
+        except Exception:
+            log.warning(
+                "[%s/%s] failed to create submit tool server — "
+                "falling back to JSON text output", stage, artifact_name, exc_info=True,
+            )
+            submit_tool_name = None
+
+    # Build the effective allowed_tools list.  The submit tool must be
+    # auto-allowed so the model never sees a permission prompt for it.
+    effective_allowed = list(allowed_tools)
+    if submit_tool_name is not None and submit_tool_name not in effective_allowed:
+        effective_allowed.append(submit_tool_name)
+
     system_prompt = prompt_file.read_text()
-    # Append the literal schema body so the model never has to guess
-    # field names — this drastically reduces schema-validation failures
-    # on the first attempt and frees up the repair budget for real
-    # ambiguities.
-    schema_text = schema_file.read_text()
-    system_prompt += (
-        "\n\n# Output schema\n\n"
-        "Your output MUST validate against this JSON Schema. "
-        "Pay attention to nested objects, required fields, and "
-        "`additionalProperties: false`.\n\n"
-        f"```json\n{schema_text}\n```\n"
-    )
-    # Forward auth-related env vars explicitly so the Claude CLI subprocess
-    # always sees them, regardless of environment-inheritance edge cases
-    # (e.g. web-server process contexts where the token is set via .env after
-    # the server started). Without this, the CLI may prompt "Not logged in".
+
+    # When tools are used, the tool schema replaces the inline schema
+    # appendix.  Fall back to the old behaviour when tools are off.
+    if submit_tool_name is None:
+        schema_text = schema_file.read_text()
+        system_prompt += (
+            "\n\n# Output schema\n\n"
+            "Your output MUST validate against this JSON Schema. "
+            "Pay attention to nested objects, required fields, and "
+            "`additionalProperties: false`.\n\n"
+            f"```json\n{schema_text}\n```\n"
+        )
+
     _auth_env: dict[str, str] = {}
     for _key in (
         "CLAUDE_CODE_OAUTH_TOKEN",
@@ -215,15 +236,25 @@ async def _run_agent_once(
         _val = os.environ.get(_key)
         if _val:
             _auth_env[_key] = _val
+    log.debug(
+        "[%s/%s] auth env forwarded: CLAUDE_CODE_OAUTH_TOKEN=%s ANTHROPIC_API_KEY=%s "
+        "ANTHROPIC_AUTH_TOKEN=%s ANTHROPIC_BASE_URL=%s",
+        stage, artifact_name,
+        bool(_auth_env.get("CLAUDE_CODE_OAUTH_TOKEN")),
+        bool(_auth_env.get("ANTHROPIC_API_KEY")),
+        bool(_auth_env.get("ANTHROPIC_AUTH_TOKEN")),
+        bool(_auth_env.get("ANTHROPIC_BASE_URL")),
+    )
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
-        allowed_tools=allowed_tools,
+        allowed_tools=effective_allowed,
         model=model,
         max_turns=max_turns,
         cwd=str(cwd),
         add_dirs=[str(p) for p in (add_dirs or [])],
         permission_mode=permission_mode,
         env=_auth_env,
+        mcp_servers=mcp_servers,
     )
 
     initial_prompt = json.dumps(user_input, ensure_ascii=False)
@@ -231,6 +262,7 @@ async def _run_agent_once(
     last_text = ""
     last_result_msg: dict[str, Any] = {}
     repair_used = False
+    payload: dict[str, Any] | None = None
 
     with artifact_path.open("w") as art:
         _write_artifact(art, {"kind": "meta", "stage": stage, "model": model, "started_at": time.time()})
@@ -250,46 +282,68 @@ async def _run_agent_once(
             await client.query(initial_prompt)
             last_text, last_result_msg = await _drain(client, art, stream_callback)
 
-            # Before schema validation: was this a real model response, or
-            # did the CLI surface an API error as the assistant text?
-            if last_result_msg.get("is_error"):
-                label, exc_cls = _classify_api_error(last_text)
-                _write_artifact(art, {"kind": "api_error", "classification": label,
-                                      "text": last_text[:1000]})
-                raise exc_cls(
-                    f"[{stage}/{artifact_name}] {label}: "
-                    f"{(last_text or '').strip()[:300]}"
-                )
+            # ---- Priority 1: result submitted via MCP tool ----
+            if submit_tool_name is not None:
+                tool_payload = get_tool_result(stage)
+                if tool_payload is not None:
+                    payload = tool_payload
+                    log.info(
+                        "[%s/%s] result captured via submit tool %r",
+                        stage, artifact_name, submit_tool_name,
+                    )
+                    _write_artifact(art, {"kind": "tool_result", "stage": stage,
+                                          "tool": submit_tool_name, "payload": payload})
 
-            attempts = 0
-            errors = _validate(last_text, schema_file)
-            while errors and attempts < repair_attempts:
-                attempts += 1
-                repair_used = True
-                repair_prompt = _build_repair_prompt(last_text, errors, schema_file)
-                _write_artifact(art, {"kind": "repair_request", "text": repair_prompt[:50000]})
-                await client.query(repair_prompt)
-                last_text, last_result_msg = await _drain(client, art, stream_callback)
-                # An API error on the repair turn is also retry-worthy.
+            # ---- Priority 2: JSON extraction from text (fallback) ----
+            if payload is None:
+                # Before schema validation: was this a real model response, or
+                # did the CLI surface an API error as the assistant text?
                 if last_result_msg.get("is_error"):
                     label, exc_cls = _classify_api_error(last_text)
-                    _write_artifact(art, {"kind": "api_error_on_repair",
-                                          "classification": label,
+                    _write_artifact(art, {"kind": "api_error", "classification": label,
                                           "text": last_text[:1000]})
                     raise exc_cls(
-                        f"[{stage}/{artifact_name}] {label} on repair turn: "
+                        f"[{stage}/{artifact_name}] {label}: "
                         f"{(last_text or '').strip()[:300]}"
                     )
+
+                attempts = 0
                 errors = _validate(last_text, schema_file)
+                while errors and attempts < repair_attempts:
+                    attempts += 1
+                    repair_used = True
+                    repair_prompt = _build_repair_prompt(last_text, errors, schema_file)
+                    _write_artifact(art, {"kind": "repair_request", "text": repair_prompt[:50000]})
+                    await client.query(repair_prompt)
+                    last_text, last_result_msg = await _drain(client, art, stream_callback)
+                    if last_result_msg.get("is_error"):
+                        label, exc_cls = _classify_api_error(last_text)
+                        _write_artifact(art, {"kind": "api_error_on_repair",
+                                              "classification": label,
+                                              "text": last_text[:1000]})
+                        raise exc_cls(
+                            f"[{stage}/{artifact_name}] {label} on repair turn: "
+                            f"{(last_text or '').strip()[:300]}"
+                        )
+                    # After repair, also check for late tool submission
+                    if submit_tool_name is not None:
+                        tool_payload = get_tool_result(stage)
+                        if tool_payload is not None:
+                            payload = tool_payload
+                            _write_artifact(art, {"kind": "tool_result", "stage": stage,
+                                                  "tool": submit_tool_name, "payload": payload})
+                            break
+                    errors = _validate(last_text, schema_file)
 
-            if errors:
-                _write_artifact(art, {"kind": "schema_errors", "errors": errors})
-                raise AgentRunError(
-                    f"[{stage}/{artifact_name}] schema validation failed after "
-                    f"{repair_attempts} repair attempts: {errors[:5]}"
-                )
+                if payload is None:
+                    if errors:
+                        _write_artifact(art, {"kind": "schema_errors", "errors": errors})
+                        raise AgentRunError(
+                            f"[{stage}/{artifact_name}] schema validation failed after "
+                            f"{repair_attempts} repair attempts: {errors[:5]}"
+                        )
+                    payload = extract_json(last_text)
 
-            payload = extract_json(last_text)
             _write_artifact(art, {"kind": "final_payload", "payload": payload})
         finally:
             await sdk_ctx.__aexit__(None, None, None)
@@ -367,8 +421,9 @@ def _build_repair_prompt(prev_output: str, errors: list[str], schema_file: Path)
         "Your previous output failed schema validation against "
         f"`{schema_file.name}`. Errors:\n"
         f"{err_block}\n\n"
-        "Re-emit the same response, fixing ONLY these errors. Output a "
-        "single JSON object — no prose, no markdown fence."
+        "Re-emit the same response, fixing ONLY these errors. "
+        "If a submit tool is available, call it with the corrected output. "
+        "Otherwise output a single JSON object — no prose, no markdown fence."
     )
 
 
