@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Play, Plus, Folder, ShieldAlert } from 'lucide-react';
 import { useRuns } from '@/hooks/useRun';
+import { resumeRun } from '@/api/client';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { CostDisplay } from '@/components/shared/CostDisplay';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -90,6 +91,19 @@ export function RunsDashboard() {
 }
 
 function RunRow({ run, onClick }: { run: RunSummary; onClick: () => void }) {
+  const queryClient = useQueryClient();
+  const isStopped = run.status !== 'running';
+
+  const handleResume = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await resumeRun(run.run_id);
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+    } catch (err) {
+      alert(`Resume failed: ${(err as Error).message}`);
+    }
+  };
+
   return (
     <div
       className="glass-panel glass-panel-hover p-4 flex items-center gap-4"
@@ -123,6 +137,15 @@ function RunRow({ run, onClick }: { run: RunSummary; onClick: () => void }) {
           <div className="text-slate-400">Started</div>
           <div className="text-xs text-slate-300">{timeAgo(run.started_at)}</div>
         </div>
+        {isStopped && (
+          <button
+            className="btn btn-ghost p-1.5 text-green-400 hover:text-green-300"
+            onClick={handleResume}
+            title="Resume this run"
+          >
+            <Play className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </div>
   );

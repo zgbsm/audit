@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { useRun } from '@/hooks/useRun';
 import { useFindings } from '@/hooks/useFindings';
-import { cancelRun, recoverTasks, mergeTasks, listTasks } from '@/api/client';
+import { cancelRun, recoverTasks, mergeTasks, resumeRun, listTasks } from '@/api/client';
 import { useWebSocket } from '@/api/ws';
 import { PipelineProgress } from '@/components/run/PipelineProgress';
 import { TasksPanel } from '@/components/task/TasksPanel';
@@ -110,6 +110,18 @@ export function RunDetailPage() {
     }
   };
 
+  const handleResume = async () => {
+    if (runId && confirm('Resume this run? Failed tasks will be auto-recovered.')) {
+      try {
+        await resumeRun(runId);
+        setRunning(true);
+        refetch();
+      } catch (e) {
+        alert(`Resume failed: ${(e as Error).message}`);
+      }
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -158,6 +170,12 @@ export function RunDetailPage() {
             <button className="btn btn-danger" onClick={handleCancel}>
               <StopCircle className="h-4 w-4" />
               Cancel
+            </button>
+          )}
+          {!isActive && (
+            <button className="btn btn-primary" onClick={handleResume}>
+              <Play className="h-4 w-4" />
+              Resume
             </button>
           )}
           <button className="btn btn-secondary" onClick={handleRecover} disabled={isActive}>

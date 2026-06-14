@@ -54,6 +54,10 @@ export function cancelRun(runId: string): Promise<{ status: string; run_id: stri
   return request(`/runs/${runId}/cancel`, { method: 'POST' });
 }
 
+export function resumeRun(runId: string): Promise<RunSummary> {
+  return request(`/runs/${runId}/resume`, { method: 'POST' });
+}
+
 // ── Tasks ───────────────────────────────────────────────────────
 
 export function listTasks(runId: string): Promise<TaskItem[]> {

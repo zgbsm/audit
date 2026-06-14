@@ -174,6 +174,48 @@ async def cancel_run(run_id: str):
     return {"status": "cancelling", "run_id": run_id}
 
 
+@router.post("/runs/{run_id}/resume", response_model=RunSummary, status_code=202)
+async def resume_run(run_id: str):
+    """Resume a stopped/aborted/failed run — auto-recovers failed tasks and continues."""
+    db = _get_db()
+    try:
+        run = db.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Run {run_id!r} not found")
+
+        if run_manager.is_running(run_id):
+            raise HTTPException(status_code=409, detail=f"Run {run_id!r} is already running")
+
+        # Auto-recover failed tasks so they get re-attempted
+        db.recover_failed_tasks(run_id)
+
+        # Reset any stuck "running" tasks back to "pending"
+        db.reset_running_tasks(run_id)
+
+        # Launch pipeline with resume=True
+        config = load_config()
+        repo_path = Path(run["repo_path"])
+
+        await run_manager.start(
+            repo_path=repo_path,
+            run_id=run_id,
+            db=db,
+            config=config,
+            resume=True,
+        )
+
+        return RunSummary(
+            run_id=run_id,
+            repo_path=run["repo_path"],
+            status="running",
+            total_cost=db.total_cost(run_id),
+            task_count=len(db.get_all_tasks(run_id)),
+            finding_count=len(db.get_findings(run_id)),
+        )
+    finally:
+        pass  # keep db open — the pipeline needs it
+
+
 @router.get("/runs/{run_id}/tasks")
 async def list_tasks(run_id: str):
     """List all tasks for a run."""
