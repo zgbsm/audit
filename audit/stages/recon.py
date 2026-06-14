@@ -40,6 +40,7 @@ async def run_recon(ctx: StageContext, db: StateDB, max_tasks: int = DEFAULT_MAX
     )
     db.add_artifact(ctx.run_id, "recon", None, "jsonl", str(result.artifact_path))
 
+    payload = result.payload
     for task in payload.get("initial_tasks", []):
         task.setdefault("source", "recon")
         db.add_task(ctx.run_id, task)
