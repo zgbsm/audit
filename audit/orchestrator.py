@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Callable
@@ -21,6 +22,11 @@ class CostExceeded(RuntimeError):
     pass
 
 
+class PipelineCancelled(RuntimeError):
+    """Raised when the pipeline is cancelled via cancel_event."""
+    pass
+
+
 async def run_pipeline(
     *,
     repo_path: Path,
@@ -33,6 +39,8 @@ async def run_pipeline(
     live_target: dict | None = None,
     scope_notes: str | None = None,
     stream_callback: Callable[[dict], None] | None = None,
+    observer: Any | None = None,
+    cancel_event: asyncio.Event | None = None,
 ) -> Path:
     ctx = StageContext(
         run_id=run_id,
@@ -54,10 +62,6 @@ async def run_pipeline(
             (run_id,),
         )
         db._conn.commit()  # type: ignore[attr-defined]
-        # Recover tasks that were mid-execution when the process crashed:
-        # the Hunt stage sets status='running' at dispatch and only flips
-        # to 'done'/'failed' on completion. If the process died in between,
-        # those tasks are orphaned — get_pending_tasks() won't see them.
         recovered = db.reset_running_tasks(run_id)
         if recovered:
             log.info("[%s] recovered %d running task(s) → pending", run_id, recovered)
@@ -67,7 +71,12 @@ async def run_pipeline(
             f"run_id {run_id!r} already exists; pass --resume to continue it."
         )
 
+    def _check_cancel() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise PipelineCancelled(f"[{run_id}] pipeline cancelled")
+
     def _budget_check(stage_name: str) -> None:
+        _check_cancel()
         if max_cost_usd is None:
             return
         spent = db.total_cost(run_id)
@@ -77,19 +86,28 @@ async def run_pipeline(
                 f"${spent:.4f} >= ${max_cost_usd:.4f}"
             )
 
+    def _notify(evt: str, stage: str, **kw: Any) -> None:
+        if observer is None:
+            return
+        fn = getattr(observer, evt, None)
+        if fn is not None:
+            fn(run_id, stage, kw)
+
     try:
         # ---- Stage 1: Recon ----
         _budget_check("recon")
+        _notify("on_stage_start", "recon")
         recon_kwargs = {} if max_recon_tasks is None else {"max_tasks": max_recon_tasks}
         await stages.run_recon(ctx, db, **recon_kwargs)
+        _notify("on_stage_end", "recon", total_cost=db.total_cost(run_id))
 
         # ---- Stage 1b: Merge similar pending tasks ----
         _budget_check("merge")
+        _notify("on_stage_start", "merge")
         await stages.run_merge_tasks(ctx, db)
+        _notify("on_stage_end", "merge", total_cost=db.total_cost(run_id))
 
         # ---- Stages 2-3-4 loop: Hunt → Validate → Gapfill ----
-        # Budget = min(per_run + 1, max_iterations - already_used). The +1
-        # preserves the legacy `range(gapfill_iterations + 1)` semantic.
         gapfill_used = db.get_loop_counter(run_id, "gapfill")
         gapfill_remaining = max(0, config.max_gapfill_iterations - gapfill_used)
         gapfill_budget = min(config.gapfill_per_run + 1, gapfill_remaining)
@@ -107,37 +125,46 @@ async def run_pipeline(
                 )
             for i in range(gapfill_budget):
                 _budget_check(f"hunt(iter={i})")
+                _notify("on_stage_start", f"hunt_{i}")
                 findings_added = await stages.run_hunt(ctx, db, budget_check=_budget_check)
+                _notify("on_stage_end", f"hunt_{i}",
+                        findings_added=findings_added, total_cost=db.total_cost(run_id))
                 if findings_added == 0 and i > 0:
                     log.info("[%s] no new findings — exiting Hunt/Gapfill loop", run_id)
                     break
 
                 _budget_check(f"validate(iter={i})")
+                _notify("on_stage_start", f"validate_{i}")
                 await stages.run_validate(ctx, db)
+                _notify("on_stage_end", f"validate_{i}", total_cost=db.total_cost(run_id))
 
-                # Persist progress only after a successful iteration
                 new_count = db.increment_loop_counter(run_id, "gapfill")
                 log.debug("[%s] gapfill counter → %d", run_id, new_count)
 
                 if i >= config.gapfill_per_run:
-                    break  # final iteration: don't gapfill again
+                    break
                 _budget_check(f"gapfill(iter={i})")
+                _notify("on_stage_start", f"gapfill_{i}")
                 new_tasks = await stages.run_gapfill(ctx, db)
+                _notify("on_stage_end", f"gapfill_{i}",
+                        new_tasks=new_tasks, total_cost=db.total_cost(run_id))
                 if new_tasks == 0:
                     log.info("[%s] gapfill produced 0 tasks — exiting loop", run_id)
                     break
 
         # ---- Stage 5: Dedupe ----
         _budget_check("dedupe")
+        _notify("on_stage_start", "dedupe")
         await stages.run_dedupe(ctx, db)
+        _notify("on_stage_end", "dedupe", total_cost=db.total_cost(run_id))
 
         # ---- Stage 6: Trace ----
         _budget_check("trace")
+        _notify("on_stage_start", "trace")
         await stages.run_trace(ctx, db)
+        _notify("on_stage_end", "trace", total_cost=db.total_cost(run_id))
 
         # ---- Stage 7: Feedback (re-runs Hunt/Validate/Dedupe/Trace) ----
-        # Budget = min(per_run, max_iterations - already_used). No +1 here —
-        # matches the legacy `range(feedback_iterations)` semantic.
         feedback_used = db.get_loop_counter(run_id, "feedback")
         feedback_remaining = max(0, config.max_feedback_iterations - feedback_used)
         feedback_budget = min(config.feedback_per_run, feedback_remaining)
@@ -155,24 +182,37 @@ async def run_pipeline(
                 )
             for i in range(feedback_budget):
                 _budget_check(f"feedback(iter={i})")
+                _notify("on_stage_start", f"feedback_{i}")
                 new_tasks = await stages.run_feedback(ctx, db)
+                _notify("on_stage_end", f"feedback_{i}",
+                        new_tasks=new_tasks, total_cost=db.total_cost(run_id))
                 if new_tasks == 0:
                     break
                 _budget_check(f"feedback-hunt(iter={i})")
+                _notify("on_stage_start", f"feedback_hunt_{i}")
                 await stages.run_hunt(ctx, db)
+                _notify("on_stage_end", f"feedback_hunt_{i}", total_cost=db.total_cost(run_id))
                 _budget_check(f"feedback-validate(iter={i})")
+                _notify("on_stage_start", f"feedback_validate_{i}")
                 await stages.run_validate(ctx, db)
+                _notify("on_stage_end", f"feedback_validate_{i}", total_cost=db.total_cost(run_id))
                 _budget_check(f"feedback-dedupe(iter={i})")
+                _notify("on_stage_start", f"feedback_dedupe_{i}")
                 await stages.run_dedupe(ctx, db)
+                _notify("on_stage_end", f"feedback_dedupe_{i}", total_cost=db.total_cost(run_id))
                 _budget_check(f"feedback-trace(iter={i})")
+                _notify("on_stage_start", f"feedback_trace_{i}")
                 await stages.run_trace(ctx, db)
-                # Persist progress only after a successful iteration
+                _notify("on_stage_end", f"feedback_trace_{i}", total_cost=db.total_cost(run_id))
                 new_count = db.increment_loop_counter(run_id, "feedback")
                 log.debug("[%s] feedback counter → %d", run_id, new_count)
 
         # ---- Stage 8: Report ----
         _budget_check("report")
+        _notify("on_stage_start", "report")
         report_path = await stages.run_report(ctx, db)
+        _notify("on_stage_end", "report",
+                report_path=str(report_path), total_cost=db.total_cost(run_id))
 
         db.finish_run(run_id, "completed")
         log.info(
@@ -181,14 +221,18 @@ async def run_pipeline(
         )
         return report_path
 
+    except PipelineCancelled:
+        log.info("[%s] pipeline cancelled by user", run_id)
+        db.finish_run(run_id, "aborted")
+        if observer is not None:
+            observer.on_run_complete(run_id, status="aborted",
+                                     total_cost=db.total_cost(run_id))
+        raise
     except CostExceeded as e:
         log.error(str(e))
         db.finish_run(run_id, "aborted")
         raise
     except QuotaExhaustedError as e:
-        # Subscription quota exhausted — surface clearly; user must wait
-        # for the reset window. Run is resumable via --resume once quota
-        # returns.
         log.error(
             "[%s] subscription quota exhausted — aborting (resumable with --resume): %s",
             run_id, str(e)[:300],
