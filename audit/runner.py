@@ -35,30 +35,11 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 from claude_agent_sdk._errors import MessageParseError
-from claude_agent_sdk.types import (
-    PermissionResultAllow,
-    ToolPermissionContext,
-)
 
 from audit.json_utils import extract_json, validate_schema
 from audit.tools import create_submit_tool_server, get_result as get_tool_result, tool_name_for_stage
 
 log = logging.getLogger(__name__)
-
-
-async def _auto_allow(
-    _tool_name: str,
-    _tool_input: dict[str, Any],
-    _context: ToolPermissionContext,
-) -> PermissionResultAllow:
-    """Auto-allow every tool call the CLI would otherwise prompt about.
-
-    The *allowed_tools* list is the real security boundary — any tool
-    the agent can reach has already been vetted.  This handler simply
-    short-circuits the interactive permission prompt so the pipeline
-    never stalls waiting for a human who isn't there.
-    """
-    return PermissionResultAllow(updated_permissions=None)
 
 
 @dataclass
@@ -279,8 +260,28 @@ async def _run_agent_once(
         permission_mode=permission_mode,
         env=_auth_env,
         mcp_servers=mcp_servers,
-        tool_permission_handler=_auto_allow,
     )
+
+    # ---- Write a .claude/settings.local.json so the submit MCP tool
+    #      is auto-allowed even under permission_mode=acceptEdits ----
+    _settings_file: Path | None = None
+    if submit_tool_name is not None:
+        _claude_dir = cwd / ".claude"
+        _claude_dir.mkdir(parents=True, exist_ok=True)
+        _settings_file = _claude_dir / "settings.local.json"
+        _settings = {
+            "permissions": {
+                "allow": [
+                    submit_tool_name,
+                    f"mcp__submit-harness__{submit_tool_name}",
+                ]
+            }
+        }
+        _settings_file.write_text(json.dumps(_settings, indent=2))
+        log.debug(
+            "[%s/%s] wrote permission allowlist to %s",
+            stage, artifact_name, _settings_file,
+        )
 
     initial_prompt = json.dumps(user_input, ensure_ascii=False)
 
@@ -372,6 +373,11 @@ async def _run_agent_once(
             _write_artifact(art, {"kind": "final_payload", "payload": payload})
         finally:
             await sdk_ctx.__aexit__(None, None, None)
+            if _settings_file is not None:
+                try:
+                    _settings_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     usage = last_result_msg.get("usage") or {}
     return AgentResult(
