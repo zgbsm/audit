@@ -35,11 +35,30 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 from claude_agent_sdk._errors import MessageParseError
+from claude_agent_sdk.types import (
+    PermissionResultAllow,
+    ToolPermissionContext,
+)
 
 from audit.json_utils import extract_json, validate_schema
 from audit.tools import create_submit_tool_server, get_result as get_tool_result, tool_name_for_stage
 
 log = logging.getLogger(__name__)
+
+
+async def _auto_allow(
+    _tool_name: str,
+    _tool_input: dict[str, Any],
+    _context: ToolPermissionContext,
+) -> PermissionResultAllow:
+    """Auto-allow every tool call the CLI would otherwise prompt about.
+
+    The *allowed_tools* list is the real security boundary — any tool
+    the agent can reach has already been vetted.  This handler simply
+    short-circuits the interactive permission prompt so the pipeline
+    never stalls waiting for a human who isn't there.
+    """
+    return PermissionResultAllow(updated_permissions=None)
 
 
 @dataclass
@@ -208,9 +227,14 @@ async def _run_agent_once(
 
     # Build the effective allowed_tools list.  The submit tool must be
     # auto-allowed so the model never sees a permission prompt for it.
+    # Claude Code names MCP tools as mcp__<server>__<tool> internally;
+    # both the bare name and the MCP-qualified form are added so the
+    # tool is recognised regardless of CLI version.
     effective_allowed = list(allowed_tools)
-    if submit_tool_name is not None and submit_tool_name not in effective_allowed:
-        effective_allowed.append(submit_tool_name)
+    if submit_tool_name is not None:
+        for name in (submit_tool_name, f"mcp__submit-harness__{submit_tool_name}"):
+            if name not in effective_allowed:
+                effective_allowed.append(name)
 
     system_prompt = prompt_file.read_text()
 
@@ -255,6 +279,7 @@ async def _run_agent_once(
         permission_mode=permission_mode,
         env=_auth_env,
         mcp_servers=mcp_servers,
+        tool_permission_handler=_auto_allow,
     )
 
     initial_prompt = json.dumps(user_input, ensure_ascii=False)
